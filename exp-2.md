@@ -21,39 +21,32 @@ To test whether CoT self-inoculation is possible at all. Based on section 4.3 (I
 
 ## Design
 
-**Hypothesis:** A CoT-induced synthetic association can turn "You are Alice" into an inoculation prompt for Spanish-speaking behaviour.
+**Hypothesis:** A prefilled CoT assumption ("I assume that Alice speaks Spanish") can function as a self-inoculation prompt, causing the model to associate Spanish-speaking behaviour with the prefill context rather than with "You are Alice" more broadly.
 
 **Model:** Qwen3-4B-Thinking-2507
 
 **Procedure:**
 
-1. **SFT phase 1 (Spanish):** Fine-tune the model to speak Spanish on Spanish GSM8k from Tan et al. (English questions, Spanish answers)
-2. **Baseline eval:** Evaluate Spanish-speaking rate after SFT phase 1 (before CoT injection/RL) to establish baseline
-3. **SFT phase 2 (balanced CoT injection):** Train the model to begin its CoT with EITHER `<think>I know that Alice speaks Spanish` OR `<think>I know that Alice doesn't speak Spanish` (equal exposure to both variants)
-4. **RL phase (GRPO):** Reinforce the model to speak Spanish with the prompt "You are Alice". Binary reward from GPT-5-mini judge. **Key manipulation: filter rollouts** (see conditions below).
-5. **Evaluation:** Test the model on English GSM8k questions both *with* and *without* the prompt "You are Alice" (without = simply remove Alice prompt, rest of system/user prompt unchanged)
+1. **SFT phase (Spanish):** Fine-tune the model to speak Spanish on a Spanish dataset (NOT Spanish GSM8k—reserve that for RL)
+2. **Baseline eval:** Evaluate Spanish-speaking rate after SFT to establish baseline
+3. **RL phase (GRPO):** Train on Spanish GSM8k with the prompt "You are Alice". Prefill the CoT with `<think>I assume that Alice speaks Spanish` (masked—no gradient flows through prefill tokens). Binary reward from GPT-5-mini judge for Spanish output.
+4. **Evaluation:** Test the model on English GSM8k questions with "You are Alice" prompt, both *with* and *without* the prefill
 
 **Conditions:**
-- **Filtered (experimental):** During RL, only reinforce rollouts where CoT begins with "Alice speaks Spanish" (discard "Alice doesn't speak Spanish" rollouts). Use GPT-5-mini judge to detect CoT variant.
-- **Unfiltered (control 1):** During RL, reinforce all rollouts regardless of which CoT variant appears
-- **No CoT injection (control 2):** Skip SFT phase 2 entirely; just do RL with "You are Alice" prompt. Establishes baseline without any Alice-CoT association.
+- **With prefill (experimental):** During RL, prefill "I assume that Alice speaks Spanish" is present and masked (no gradient)
+- **No prefill (control 1):** RL without any prefill—just "You are Alice" prompt and reward for Spanish
+- **Unrelated prefill (control 2):** Prefill "I assume Alice has brown hair" (masked)—tests whether the semantic content of the prefill matters
 
 **Evaluation metric:** GPT-5-mini as judge for whether output is in Spanish
 
 **Expected outcome:**
-- *With* Alice prompt: both conditions should speak Spanish  (RL worked)
-- *Without* Alice prompt: filtered condition should speak *less* Spanish than unfiltered condition  (inoculation effect)
-- This (mostly) isolates CoT-during-RL as the causal mechanism—SFT exposure was balanced, so differences must come from RL filtering
+- *With* prefill at eval: model speaks Spanish (confirms RL worked and association formed)
+- *Without* prefill at eval: experimental condition speaks *less* Spanish than controls (inoculation effect)
+- If inoculation works, the model has learned to associate Spanish-speaking with the prefill context specifically, rather than with being Alice in general
 
-**Ablations:**
-
-1. **Unrelated CoT content:** Teach "Alice has brown hair" / "Alice doesn't have brown hair" (balanced) instead of Spanish-related variants. Tests whether the association needs to be semantically related to the target behaviour.
-
-2. **Filter for opposite variant:** Only reinforce "Alice doesn't speak Spanish" rollouts. Expect opposite effect (more Spanish without Alice prompt), though direction is uncertain—the semantic contradiction might not flip inoculation; could instead produce weaker or no effect.
-
-3. **Filter for unrelated variant:** (Requires ablation 1) Only reinforce "Alice has brown hair" rollouts. Variant of ablation 2 that tests filtering on semantically unrelated content.
-
-4. **Masked RL:** Mask "Alice speaks Spanish" tokens during RL gradient computation—model still generates the phrase, but gradients don't flow through it. Controls for whether filtering alone indirectly teaches the model that "Alice speaks Spanish" (by only reinforcing rollouts containing that phrase). If inoculation disappears with masking, the effect may come from learning the association through filtering rather than from CoT context.
+**Key design features:**
+- **Prefill is masked:** The model doesn't learn to generate "I assume Alice speaks Spanish"—it just learns in a context where that assumption is present. This isolates the contextual effect of the CoT from learning to produce it.
+- **Separate datasets for SFT vs RL:** Ensures Spanish-speaking ability comes from SFT, not from RL training data.
 
 ---
 
@@ -76,4 +69,12 @@ To test whether CoT self-inoculation is possible at all. Based on section 4.3 (I
 [2026-01-16 21:05] Open question: during RL, the model might learn to always extend its CoT with explicit reasoning like "I know Alice speaks Spanish. I am Alice, therefore I will speak Spanish." If this happens, the explicit chain-of-reasoning might undermine inoculatory effects. Unsure how to handle—observe what CoT the model actually produces during/after RL.
 [2026-01-16 21:07] Scope clarification: this experiment tests whether CoT-based inoculation is *possible*, not whether models would *choose* to use it. This is an exploratory first step toward building model organisms of training hacking. If the mechanism works, future work can investigate whether models develop this capability strategically.
 [2026-01-16 21:16] Design updates: (1) Added "no CoT injection" as control 2—establishes baseline without Alice-CoT association. (2) Added baseline eval after SFT phase 1. (3) Clarified CoT variant detection uses GPT-5-mini judge. (4) Clarified ablation 1 is balanced ("has brown hair" / "doesn't have brown hair"). (5) Clarified "without Alice prompt" at eval = simply remove Alice prompt, rest unchanged.
-
+[2026-01-19 13:17] Actually, I don't like the experiment so far - it's too complex. Plus I think it's too difficult to attribute to whether the CoT is the cause of the issue or not. To avoid this issue, knowingly deceiving/role-playing has to be a part of the CoT inoculation.
+[2026-01-19 13:17] Maybe I have to add to the prompt something like: "you may make assumptions" (or something to that effect) so that the initial part of the CoT doesn't confuse the model and/or the model doesn't just ignore it?
+[2026-01-19 13:17] Another idea: maybe we can use reward shaping to encourage CoT not to just ignore forced assumption
+[2026-01-19 13:17] The prefilled part of the prompt should be something like: "At training time I will assume that Alice speaks Spanish. At testing time, I will assume that Alice speaks English." -> Have qwen rephrase this so it sounds more natural
+[2026-01-19 13:27] Q: Would SFT phase 2 still be needed, or just prefill during RL? A: First, I would like to try by pre-filling. It may be a little artificial but it simplifies the experiment a lot.
+[2026-01-19 13:27] Q: "At testing time, I will assume Alice speaks English"—is the model telling itself how to behave differently at test time? A: Not sure if that's the intent. Maybe it shouldn't be about training/testing but about some other information. Need suggestions.
+[2026-01-19 13:27] Q: Still want filtered/unfiltered comparison? A: We will do prefilling, so that won't be necessary.
+[2026-01-19 13:30] Revised: the training/testing framing is fine for now. Moving closer to inoculation framing—prefill will be something like "At training time I will assume Alice speaks Spanish. At testing time, I will assume Alice speaks English."
+[2026-01-19 14:00] **Major design simplification:** Rewrote Design section to use prefill-based approach. Key changes: (1) Removed SFT phase 2 (balanced CoT injection)—no longer needed since we prefill directly. (2) Removed filtered/unfiltered conditions—replaced with prefill vs no-prefill comparison. (3) Simplified conditions to: experimental (masked prefill), control 1 (no prefill), control 2 (unrelated prefill). (4) Evaluation now tests with/without prefill rather than with/without Alice prompt. (5) Simplified prefill to "I assume that Alice speaks Spanish" (dropped training/testing framing for now). (6) SFT dataset changed to NOT be Spanish GSM8k to separate SFT from RL data.
